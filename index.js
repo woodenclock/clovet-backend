@@ -1,23 +1,48 @@
-// covet-backend/index.js
-
 const express = require('express');
-const cors = require('cors');
-const bodyParser = require('body-parser');
+const cors     = require('cors');
+const bodyJson = require('body-parser').json;
+const Database = require('better-sqlite3');
+
+// ---------- DB setup ----------
+const db = new Database('./clovet.db');
+db.pragma('journal_mode = WAL');           // safer for concurrent writes
+db.exec(`
+  CREATE TABLE IF NOT EXISTS pins (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    img      TEXT,
+    text     TEXT,
+    savedAt  INTEGER
+  )
+`);
+const insertPin = db.prepare(
+  'INSERT INTO pins (img, text, savedAt) VALUES (?, ?, ?)'
+);
+const selectPins = db.prepare(
+  'SELECT * FROM pins ORDER BY savedAt DESC'
+);
+// --------------------------------
 
 const app = express();
-const PORT = 3001;
-
 app.use(cors());
-app.use(bodyParser.json());
+app.use(bodyJson());
 
+// save-pin endpoint (called by the extension)
 app.post('/api/save-pin', (req, res) => {
-  const { img, text } = req.body;
-  console.log('📌 Saved pin:', { img, text });
+  const { img, text } = req.body || {};
+  if (!img) return res.status(400).json({ error: 'img required' });
 
-  // TODO: save to database or forward to OpenAI
-  res.status(200).json({ message: 'Pin saved successfully' });
+  insertPin.run(img, text, Date.now());
+  console.log('📌  Saved:', img.slice(0, 60), '…');
+  res.sendStatus(200);
 });
 
+// fetch all pins (mobile app can call this)
+app.get('/api/pins', (_, res) => {
+  const rows = selectPins.all();
+  res.json(rows);
+});
+
+const PORT = 3001;
 app.listen(PORT, () => {
-  console.log(`🚀 Covet backend running on http://localhost:${PORT}`);
+  console.log(`🚀 Clovet backend + SQLite ready → http://localhost:${PORT}`);
 });
