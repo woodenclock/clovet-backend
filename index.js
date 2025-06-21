@@ -54,6 +54,12 @@ app.delete('/api/pins/:id', (req, res) => {
   return info.changes ? res.sendStatus(204) : res.sendStatus(404);
 });
 
+// New endpoint to delete all pins
+app.delete('/api/pins', (_, res) => {
+  const info = db.prepare('DELETE FROM pins').run();
+  return res.status(200).json({ deleted: info.changes });
+});
+
 app.listen(3001, () =>
   console.log('🚀 Clovet backend + SQLite on http://localhost:3001')
 );
