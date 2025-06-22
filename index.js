@@ -81,7 +81,7 @@ app.post('/api/curate', async (req, res) => {
     
     // Prepare data for ChatGPT API
     const pinDescriptions = pins.map((pin, index) => 
-      `Item ${index + 1}: ${pin.text}`
+      `Item ${index + 1}: ${pin.text || 'Clothing item'}`
     ).join('\n');
     
     // Call ChatGPT API
@@ -101,71 +101,106 @@ app.post('/api/curate', async (req, res) => {
       return res.json(randomItems);
     }
     
-    const openaiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${OPENAI_API_KEY}`
-      },
-      body: JSON.stringify({
-        model: "gpt-3.5-turbo",
-        messages: [
-          {
-            role: "system",
-            content: "You are a fashion expert who can curate clothing items. Select 3-5 items from the list that would work well together as an outfit or collection. Provide a reason for each selection."
-          },
-          {
-            role: "user",
-            content: `Here are the clothing items in my collection:\n${pinDescriptions}\n\nPlease select 3-5 items that would work well together and explain why you chose each one.`
-          }
-        ],
-        temperature: 0.7,
-        max_tokens: 500
-      })
-    });
+    console.log('OpenAI API key found, length:', OPENAI_API_KEY.length);
+    console.log('API key starts with:', OPENAI_API_KEY.substring(0, 5) + '...');
     
-    const aiData = await openaiResponse.json();
-    
-    if (!aiData.choices || !aiData.choices[0] || !aiData.choices[0].message) {
-      throw new Error('Invalid response from OpenAI API');
-    }
-    
-    const aiResponse = aiData.choices[0].message.content;
-    
-    // Parse AI response to extract selected items and reasons
-    const selectedItems = [];
-    const itemRegex = /Item (\d+).*?(?:because|reason|as|:)\s*(.*?)(?=Item \d+|$)/gis;
-    
-    let match;
-    while ((match = itemRegex.exec(aiResponse)) !== null) {
-      const itemIndex = parseInt(match[1]) - 1;
-      const reason = match[2].trim();
+    try {
+      console.log('Calling OpenAI API...');
+      const openaiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${OPENAI_API_KEY}`
+        },
+        body: JSON.stringify({
+          model: "gpt-3.5-turbo",
+          messages: [
+            {
+              role: "system",
+              content: "You are a fashion expert who can curate clothing items. Select 3-5 items from the list that would work well together as an outfit or collection. Provide a reason for each selection."
+            },
+            {
+              role: "user",
+              content: `Here are the clothing items in my collection:\n${pinDescriptions}\n\nPlease select 3-5 items that would work well together and explain why you chose each one.`
+            }
+          ],
+          temperature: 0.7,
+          max_tokens: 500
+        })
+      });
       
-      if (pins[itemIndex]) {
-        selectedItems.push({
-          ...pins[itemIndex],
-          reason: reason
-        });
+      const aiData = await openaiResponse.json();
+      
+      if (!aiData.choices || !aiData.choices[0] || !aiData.choices[0].message) {
+        throw new Error('Invalid response from OpenAI API');
       }
-    }
-    
-    // If parsing failed, fall back to selecting random items
-    if (selectedItems.length === 0) {
+      
+      const aiResponse = aiData.choices[0].message.content;
+      
+      // Parse AI response to extract selected items and reasons
+      const selectedItems = [];
+      const itemRegex = /Item (\d+).*?(?:because|reason|as|:)\s*(.*?)(?=Item \d+|$)/gis;
+      
+      let match;
+      while ((match = itemRegex.exec(aiResponse)) !== null) {
+        const itemIndex = parseInt(match[1]) - 1;
+        const reason = match[2].trim();
+        
+        if (pins[itemIndex]) {
+          selectedItems.push({
+            ...pins[itemIndex],
+            reason: reason
+          });
+        }
+      }
+      
+      // If parsing failed, fall back to selecting random items
+      if (selectedItems.length === 0) {
+        const randomItems = [...pins]
+          .sort(() => 0.5 - Math.random())
+          .slice(0, 3)
+          .map(pin => ({
+            ...pin,
+            reason: "Selected based on your collection (AI response parsing failed)"
+          }));
+        
+        return res.json(randomItems);
+      }
+      
+      return res.json(selectedItems);
+    } catch (openaiError) {
+      console.error('OpenAI API error:', openaiError);
+      // Fallback to random selection if OpenAI API fails
       const randomItems = [...pins]
         .sort(() => 0.5 - Math.random())
         .slice(0, 3)
         .map(pin => ({
           ...pin,
-          reason: "Selected based on your collection (AI response parsing failed)"
+          reason: "Selected randomly (OpenAI API error)"
         }));
       
       return res.json(randomItems);
     }
-    
-    res.json(selectedItems);
-    
   } catch (error) {
     console.error('Error in curate endpoint:', error);
+    // Even in case of general error, try to return something useful
+    try {
+      const { pins } = req.body;
+      if (pins && Array.isArray(pins) && pins.length > 0) {
+        const randomItems = [...pins]
+          .sort(() => 0.5 - Math.random())
+          .slice(0, Math.min(3, pins.length))
+          .map(pin => ({
+            ...pin,
+            reason: "Selected randomly (server error recovery)"
+          }));
+        
+        return res.json(randomItems);
+      }
+    } catch (fallbackError) {
+      console.error('Even fallback failed:', fallbackError);
+    }
+    
     res.status(500).json({ error: 'Failed to curate items', details: error.message });
   }
 });
