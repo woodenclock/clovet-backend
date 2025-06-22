@@ -79,6 +79,11 @@ app.post('/api/curate', async (req, res) => {
       return res.json(curatedItems);
     }
     
+    // Prepare data for ChatGPT API
+    const pinDescriptions = pins.map((pin, index) => 
+      `Item ${index + 1}: ${pin.text || 'Clothing item'}`
+    ).join('\n');
+    
     // Call ChatGPT API
     const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
     
@@ -100,46 +105,7 @@ app.post('/api/curate', async (req, res) => {
     console.log('API key starts with:', OPENAI_API_KEY.substring(0, 5) + '...');
     
     try {
-      console.log('Calling OpenAI API with GPT-4o (vision capabilities)...');
-      
-      // Prepare messages with images
-      const messages = [
-        {
-          role: "system",
-          content: "You are a fashion expert who can analyze clothing images. Select 3-5 items from the provided images that would work well together as an outfit or collection. Provide a reason for each selection, considering style, color coordination, and occasion appropriateness."
-        },
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: "Here are the clothing items in my collection. Please select 3-5 items that would work well together and explain why you chose each one."
-            }
-          ]
-        }
-      ];
-      
-      // Add each clothing item as a separate image in the user message
-      pins.forEach((pin, index) => {
-        if (pin.img) {
-          messages[1].content.push({
-            type: "image_url",
-            image_url: {
-              url: pin.img,
-              detail: "low"
-            }
-          });
-          
-          // Add text description if available
-          if (pin.text) {
-            messages[1].content.push({
-              type: "text",
-              text: `Item ${index + 1}: ${pin.text}`
-            });
-          }
-        }
-      });
-      
+      console.log('Calling OpenAI API...');
       const openaiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -147,28 +113,29 @@ app.post('/api/curate', async (req, res) => {
           'Authorization': `Bearer ${OPENAI_API_KEY}`
         },
         body: JSON.stringify({
-          model: "gpt-4o",
-          messages: messages,
+          model: "gpt-3.5-turbo",
+          messages: [
+            {
+              role: "system",
+              content: "You are a fashion expert who can curate clothing items. Select 3-5 items from the list that would work well together as an outfit or collection. Provide a reason for each selection."
+            },
+            {
+              role: "user",
+              content: `Here are the clothing items in my collection:\n${pinDescriptions}\n\nPlease select 3-5 items that would work well together and explain why you chose each one.`
+            }
+          ],
           temperature: 0.7,
-          max_tokens: 800
+          max_tokens: 500
         })
       });
       
       const aiData = await openaiResponse.json();
-      console.log('OpenAI response status:', aiData.error ? 'Error' : 'Success');
-      
-      if (aiData.error) {
-        console.error('OpenAI API error:', aiData.error);
-        throw new Error(`OpenAI API error: ${aiData.error.message || 'Unknown error'}`);
-      }
       
       if (!aiData.choices || !aiData.choices[0] || !aiData.choices[0].message) {
-        console.error('Invalid response structure:', JSON.stringify(aiData));
         throw new Error('Invalid response from OpenAI API');
       }
       
       const aiResponse = aiData.choices[0].message.content;
-      console.log('AI response:', aiResponse);
       
       // Parse AI response to extract selected items and reasons
       const selectedItems = [];
@@ -187,31 +154,7 @@ app.post('/api/curate', async (req, res) => {
         }
       }
       
-      // If no items matched by regex, try to extract based on descriptions
-      if (selectedItems.length === 0) {
-        // Look for descriptions that might match our items
-        pins.forEach((pin) => {
-          if (pin.text) {
-            // Create a regex to find mentions of this item's description
-            const descriptionWords = pin.text.split(' ').filter(word => word.length > 3);
-            
-            for (const word of descriptionWords) {
-              const wordRegex = new RegExp(`(${word}).*?(because|reason|as|:)\\s*([^\\n]+)`, 'i');
-              const descMatch = aiResponse.match(wordRegex);
-              
-              if (descMatch) {
-                selectedItems.push({
-                  ...pin,
-                  reason: descMatch[3].trim()
-                });
-                break; // Found a match for this item, move to next
-              }
-            }
-          }
-        });
-      }
-      
-      // If still no items found, fall back to random selection
+      // If parsing failed, fall back to selecting random items
       if (selectedItems.length === 0) {
         const randomItems = [...pins]
           .sort(() => 0.5 - Math.random())
